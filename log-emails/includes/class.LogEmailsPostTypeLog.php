@@ -218,7 +218,10 @@ class LogEmailsPostTypeLog {
 		}
 
 		$new_columns['_log_emails_title']		= _x('Subject', 'email subject', 'log-emails');
+		$new_columns['_log_emails_log_from']	= _x('Sender', 'email sender', 'log-emails');
 		$new_columns['_log_emails_log_to']		= _x('Recipients', 'email recipients (To:)', 'log-emails');
+		$new_columns['_log_emails_log_cc']		= _x('CC', 'email recipients', 'log-emails');
+		$new_columns['_log_emails_log_bcc']		= _x('BCC', 'email recipients', 'log-emails');
 		$new_columns['_log_emails_warnings']	= _x('Warnings', 'list column title', 'log-emails');
 
 		// bring across date column
@@ -246,15 +249,18 @@ class LogEmailsPostTypeLog {
 					// show log excerpt if viewing in excerpt mode
 					global $mode;
 					if ('excerpt' === $mode) {
-						echo '<p>', wp_trim_words($post->post_content), '</p>';
+						echo '<p>', wp_trim_words(wp_kses_post($post->post_content)), '</p>';
 					}
 				}
 				break;
 
+			case '_log_emails_log_from':
 			case '_log_emails_log_to':
+			case '_log_emails_log_cc':
+			case '_log_emails_log_bcc':
 				$post = get_post($post_id);
 				if ($post) {
-					echo esc_html(get_post_meta($post_id, '_log_emails_log_to', true));
+					echo esc_html(get_post_meta($post_id, $column_name, true));
 				}
 				break;
 
@@ -275,7 +281,7 @@ class LogEmailsPostTypeLog {
 	* customise the table list row actions
 	* @param array $actions
 	* @param WP_Post $post
-	* @return return
+	* @return array
 	*/
 	public function postRowActions($actions, $post) {
 		$actions = array();
@@ -455,6 +461,7 @@ class LogEmailsPostTypeLog {
 	* create a new email log
 	* @param string $subject
 	* @param string $message
+	* @param string $alt_message
 	* @param array $fields
 	* @return int post ID of new log
 	*/

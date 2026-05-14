@@ -4,11 +4,16 @@ if (!defined('ABSPATH')) {
 	exit;
 }
 
+const LOG_EMAILS_DEFAULT_LIMIT	= 30;
+
 /**
 * plugin management
 */
 class LogEmailsPlugin {
 
+	/**
+	 * @var array
+	 */
 	protected $args = false;				// arguments to wp_mail() function, recorded from filter wp_mail
 
 	// scheduled tasks
@@ -32,7 +37,6 @@ class LogEmailsPlugin {
 	* hook WordPress to handle script and style fixes
 	*/
 	public function __construct() {
-		add_action('init', array($this, 'loadTranslations'), 0);		// must run before CPT are registered
 		add_action('init', array($this, 'init'));
 		add_action('admin_init', array($this, 'registerSettings'));
 		add_action('admin_menu', array($this, 'adminMenu'));
@@ -50,14 +54,6 @@ class LogEmailsPlugin {
 		// load custom post type handler
 		require LOG_EMAILS_PLUGIN_ROOT . 'includes/class.LogEmailsPostTypeLog.php';
 		new LogEmailsPostTypeLog();
-	}
-
-	/**
-	* load translations
-	* NB: must load before CPT are registered so that strings are properly translated
-	*/
-	public function loadTranslations() {
-		load_plugin_textdomain('log-emails', false, basename(dirname(LOG_EMAILS_PLUGIN_FILE)) . '/languages/');
 	}
 
 	/**
@@ -115,11 +111,30 @@ class LogEmailsPlugin {
 
 		// collate additional fields into array
 		$fields = array();
-		$fields['_log_emails_log_from'] = sprintf('%s <%s>', $phpmailer->FromName, $phpmailer->From);
+
+		// only record the From name if it isn't empty; otherwise just record the email address
+		$from_name = $phpmailer->FromName;
+		if ($from_name === '""') {
+			$from_name = false;
+		}
+		$fields['_log_emails_log_from'] = $from_name ? sprintf('%s <%s>', $from_name, $phpmailer->From) : $phpmailer->From;
 
 		// detect text/html when content type is text/plain but email has an alternate message (WP e-Commerce, I'm looking at you!)
 		$contentType = $phpmailer->ContentType;
 		if ($contentType === 'text/plain' && !empty($alt_message)) {
+			$contentType = 'text/html';
+		}
+		else if (empty($alt_message) && preg_match('#multipart/alternative; boundary="(\w+)"#', $contentType, $matches)) {
+			// check for Gravity Forms multipart emails which combines the plain and HTML parts in the body
+			$boundary = $matches[1];
+			$pattern = sprintf('#--%1$s\s+Content-Type: text/plain;\s+(.*?)\s+--%1$s#s', preg_quote($boundary, '#'));
+			if (preg_match($pattern, $phpmailer->Body, $matches)) {
+				$alt_message = $matches[1];
+			}
+			$pattern = sprintf('#--%1$s\s+Content-Type: text/html;\s+(.*?)\s+--%1$s#s', preg_quote($boundary, '#'));
+			if (preg_match($pattern, $phpmailer->Body, $matches)) {
+				$message = $matches[1];
+			}
 			$contentType = 'text/html';
 		}
 		$fields['_log_emails_log_content-type'] = $contentType;
@@ -137,6 +152,7 @@ class LogEmailsPlugin {
 		if (isset($this->args['headers'])) {
 			$cc = array();
 			$bcc = array();
+			$replyto = array();
 			$headers = $this->args['headers'];
 			if (!is_array($headers)) {
 				$headers = explode("\n", str_replace("\r\n", "\n", $headers));
@@ -145,6 +161,7 @@ class LogEmailsPlugin {
 				if ($header) {
 					list($header, $value) = explode(':', $header, 2);
 					switch (strtolower($header)) {
+
 						case 'cc':
 							$cc[] = trim($value);
 							break;
@@ -152,6 +169,11 @@ class LogEmailsPlugin {
 						case 'bcc':
 							$bcc[] = trim($value);
 							break;
+
+						case 'reply-to':
+							$replyto[] = trim($value);
+							break;
+
 					}
 				}
 			}
@@ -161,6 +183,9 @@ class LogEmailsPlugin {
 			}
 			if (!empty($bcc)) {
 				$fields['_log_emails_log_bcc'] = implode(', ', $bcc);
+			}
+			if (!empty($replyto)) {
+				$fields['_log_emails_log_replyto'] = implode(', ', $replyto);
 			}
 		}
 
@@ -217,6 +242,8 @@ class LogEmailsPlugin {
 
 	/**
 	* action hook for adding plugin details links
+	* @param array $links
+	* @param string $file
 	*/
 	public function addPluginDetailsLinks($links, $file) {
 		if ($file === LOG_EMAILS_PLUGIN_NAME) {
@@ -241,7 +268,7 @@ class LogEmailsPlugin {
 			array(
 				'option_name'		=> 'log_emails_limit_days',
 				'label_text'		=> __('number of days to keep email logs', 'log-emails'),
-				'default'			=> 30,
+				'default'			=> LOG_EMAILS_DEFAULT_LIMIT,
 				'class'				=> 'small-text',
 			)
 		);
@@ -264,6 +291,7 @@ class LogEmailsPlugin {
 
 	/**
 	* show text field
+	* @param array $args
 	*/
 	public function settingsFieldText($args) {
 		require LOG_EMAILS_PLUGIN_ROOT . 'views/settings-field-text.php';
@@ -273,7 +301,7 @@ class LogEmailsPlugin {
 	* execute purge of old logs
 	*/
 	public function purge() {
-		$limit_days = get_option('log_emails_limit_days');
+		$limit_days = get_option('log_emails_limit_days', LOG_EMAILS_DEFAULT_LIMIT);
 		if (empty($limit_days) || !is_numeric($limit_days)) {
 			return;
 		}
